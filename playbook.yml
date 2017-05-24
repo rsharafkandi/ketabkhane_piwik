@@ -1,0 +1,101 @@
+---
+- hosts: all
+  become: yes
+  tasks:
+    - name: add centos-release-scl repo
+      yum:
+        name: "centos-release-scl"
+        state: installed
+
+    - name: install necessary packages
+      yum:
+        name: "{{ item }}"
+        state: installed
+      with_items:
+        - "gcc"
+        - "httpd"
+        - "mariadb"
+        - "mariadb-server"
+        - "mariadb-devel"
+        - "python-devel"
+        - "rh-php56-php"
+        - "rh-php56-php-pdo"
+        - "rh-php56-php-mysqlnd"
+        - "rh-php56-php-mbstring"
+        - "rh-php56-php-xml"
+        - "rh-php56-php-gd"
+        - "unzip"
+
+    - name: downlad install pip script
+      get_url:
+        url: "https://bootstrap.pypa.io/get-pip.py"
+        dest: "/tmp"
+        timeout: 100
+
+    - name: install pip
+      command: /bin/python /tmp/get-pip.py
+
+    - name: install MySQL-python using pip
+      command: /bin/pip install MySQL-python
+
+    - name: copy php config files to apache config directories
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - { src: 'php.conf', dest: '/etc/httpd/conf.d/php.conf' }
+        - { src: '10-php.conf', dest: '/etc/httpd/conf.modules.d/10-php.conf' }
+
+    - name: download piwik
+      get_url:
+        url: "https://builds.piwik.org/piwik.zip"
+        dest: "/tmp"
+        timeout: 300
+
+    - name: unzip piwik.zip
+      unarchive:
+        src: "/tmp/piwik.zip"
+        dest: "/opt"
+        owner: "apache"
+        remote_src: True
+
+    - name: remove extra files
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - '/opt/How to install Piwik.html'
+        - '/opt/piwik/plugins/Morpheus/icons/submodule'
+
+    - name: copy piwik.conf to /etc/httpd/conf.d
+      template:
+        src: "piwik.conf"
+        dest: "/etc/httpd/conf.d"
+      notify: restart httpd
+
+    - name: make sure mariadb server is up and running
+      service:
+        name: "mariadb"
+        state: "started"
+
+    - name: create database piwik in mysql
+      mysql_db:
+        name: "piwik"
+        state: present
+
+    - name: create mysql piwik login
+      mysql_user:
+        name: piwik_user
+        password: "{{ piwik.mysql_password }}"
+        priv: 'piwik.*:ALL'
+        state: present
+
+    - name: set selinux type context for piwik directory
+      command: /bin/chcon -t httpd_sys_content_t -R /opt/piwik
+
+    - name: set selinux type context for tmp directory
+      command: /bin/chcon -R -t httpd_sys_rw_content_t /opt/piwik/tmp
+
+  handlers:
+    - name: restart httpd
+      service: name=httpd state=restarted
